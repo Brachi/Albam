@@ -300,8 +300,15 @@ def _create_blender_armature_from_mod(blender_object, mod, armature_name):
     bpy.context.scene.objects.link(armature_ob)
     bpy.context.scene.objects.active = armature_ob
     armature_ob.select = True
-    bpy.ops.object.mode_set(mode='EDIT')
 
+    _create_blender_bones(mod, armature, connect_to_child=True)
+    assert len(armature.bones) == len(mod.bones_array)
+    _create_bone_groups(armature_ob, mod)
+    return armature_ob
+
+
+def _create_blender_bones(mod, armature, connect_to_child=False):
+    bpy.ops.object.mode_set(mode='EDIT')
     blender_bones = []
     for i, bone in enumerate(mod.bones_array):
         blender_bone = armature.edit_bones.new(str(i))
@@ -319,9 +326,20 @@ def _create_blender_armature_from_mod(blender_object, mod, armature_name):
             wtm *= Matrix.Translation((b.location_x / 100, b.location_z / 100 * -1, b.location_y / 100))
         blender_bone.head = wtm.to_translation()
         blender_bone.parent = blender_bones[bone.parent_index]
+        if not connect_to_child:
+            blender_bone.tail = blender_bone.head
+            blender_bone.tail[2] += 0.01
 
+    if connect_to_child:
+        _set_bone_tails_connect_to_child(mod, blender_bones)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
     assert len(blender_bones) == len(mod.bones_array)
 
+    return blender_bones
+
+
+def _set_bone_tails_connect_to_child(mod, blender_bones):
     non_deform_bone_indices = get_non_deform_bone_indices(mod)
     # set tails of bone to their children or make them small if they have none
     for i, bone in enumerate(blender_bones):
@@ -346,12 +364,6 @@ def _create_blender_armature_from_mod(blender_object, mod, armature_name):
             bone.tail[1] += 0.01
         if round(bone.tail[2], 10) == round(bone.head[2], 10):
             bone.tail[2] += 0.01
-
-    bpy.ops.object.mode_set(mode='OBJECT')
-    assert len(armature.bones) == len(mod.bones_array)
-
-    _create_bone_groups(armature_ob, mod)
-    return armature_ob
 
 
 def _create_bone_groups(armature_ob, mod):
