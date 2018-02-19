@@ -10,8 +10,11 @@ from albam.lib.misc import find_files
 from tests.conftest import SAMPLES_DIR, albam_import_export
 
 ARC_SAMPLES_DIR = os.path.join(SAMPLES_DIR, 're5/arc')
+LMT_SAMPLES_DIR = os.path.join(SAMPLES_DIR, 're5/lmt')
 ARC_FILES = [os.path.join(root, f) for root, _, files in os.walk(ARC_SAMPLES_DIR)
              for f in files if f.endswith('.arc')]
+LMT_FILES = [os.path.join(root, f) for root, _, files in os.walk(LMT_SAMPLES_DIR)
+             for f in files if f.endswith('.lmt')]
 
 
 CACHE_ARC = {}  # source arc dir: list of all files extracted in a temp dir
