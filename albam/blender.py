@@ -127,12 +127,7 @@ class AlbamImportOperator(bpy.types.Operator):
 
         return {'FINISHED'}
 
-    def _import_file(self, **kwargs):
-        parent = kwargs.get('parent')
-        file_path = kwargs.get('file_path')
-        context = kwargs['context']
-        kwargs['unpack_dir'] = self.unpack_dir
-
+    def _import_file(self, file_path, context, parent=None, **kwargs):
         with open(file_path, 'rb') as f:
             data = f.read()
         id_magic = data[:4]
@@ -149,19 +144,20 @@ class AlbamImportOperator(bpy.types.Operator):
         obj.albam_imported_item.source_path = file_path
 
         # TODO: proper logging/raising and rollback if failure
-        results_dict = func(blender_object=obj, **kwargs)
+        results_dict = func(obj, file_path, **kwargs)
         bpy.context.scene.objects.link(obj)
 
         is_exportable = bool(blender_registry.export_registry.get(id_magic))
         if is_exportable:
             new_albam_imported_item = context.scene.albam_items_imported.add()
             new_albam_imported_item.name = name
+
         # TODO: re-think this. Is it necessary? Too implicit
         if results_dict:
             files = results_dict.get('files', [])
             kwargs = results_dict.get('kwargs', {})
             for f in files:
-                self._import_file(file_path=f, context=context, **kwargs)
+                self._import_file(file_path=f, context=context, parent=obj, **kwargs)
 
 
 class AlbamExportOperator(bpy.types.Operator):
