@@ -1,3 +1,4 @@
+from io import BytesIO
 from itertools import chain
 import ntpath
 import os
@@ -9,7 +10,7 @@ except ImportError:
     pass
 
 from albam.exceptions import BuildMeshError, TextureError
-from albam.engines.mtframework import Arc, Mod156, Tex112, KNOWN_ARC_BLENDER_CRASH, CORRUPTED_ARCS
+from albam.engines.mtframework import Arc, Mod156, Tex112, LMT, KNOWN_ARC_BLENDER_CRASH, CORRUPTED_ARCS
 from albam.engines.mtframework.utils import (
     get_vertices_array,
     get_indices_array,
@@ -60,6 +61,61 @@ def _set_bounding_box(mod, blender_object):
     blender_object.data.from_pydata(vertices, [], faces)
     blender_object.data.validate()
     blender_object.draw_type = 'WIRE'
+
+
+@blender_registry.register_function('import', identifier=b'LMT\x00')
+def import_lmt(blender_object, file_path, **kwargs):
+    lmt = LMT(file_path)
+    anim_data = lmt.decompress()
+    # quick hack, apply to all armature assuming they are mod
+    armatures = [o for o in bpy.data.objects if o.type == 'ARMATURE']
+    if not armatures:
+        print('no armatures, skipping lmt import')
+        return
+    for armature in armatures:
+        parent = armature.parent
+        mod = Mod156(file_path=BytesIO(parent.albam_imported_item.data))
+        mapping = mod.bones_animation_mapping
+
+    for track_index, frames in anim_data.items():
+        bone_index = mapping[track_index]
+        if bone_index == 255:
+            continue
+        if frames['rotation']:
+            armature.pose.bones[bone_index].rotation_mode = 'QUATERNION'
+            armature.pose.bones[bone_index].rotation_quaternion = frames['rotation'][0]
+        if frames['location']:
+            armature.pose.bones[bone_index].location = [f / 100 for f in frames['location'][0]]
+
+        # XXX 
+        # _add_ik(armature, frames, bone_index)
+
+
+def _add_ik(armature, frames, bone_index):
+    if not frames['location_ik']:
+        return
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    # deselect all objects
+    for i in bpy.context.scene.objects:
+        i.select = False
+    bpy.context.scene.objects.active = armature
+    armature.select = True
+    bpy.ops.object.mode_set(mode='EDIT')
+
+    bone_name = 'target_' + str(bone_index)
+    blender_bone = armature.data.edit_bones.new(bone_name)
+    blender_bone.tail[2] += 0.01
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    armature.pose.bones[bone_name].location = [f / 100 for f in frames['location_ik'][0]]
+
+    pose_bone = armature.pose.bones[str(bone_index)]
+    constraint = pose_bone.constraints.new('IK')
+    constraint.target = armature
+    constraint.subtarget = bone_name
+    constraint.chain_count = 3
+    constraint.use_rotation = True
 
 
 @blender_registry.register_function('import', identifier=b'MOD\x00')
