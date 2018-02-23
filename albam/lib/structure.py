@@ -1,6 +1,4 @@
-from copy import copy
 import ctypes
-from ctypes import c_float
 import os
 
 
@@ -63,8 +61,10 @@ def parse_fields(sequence_of_tuples, file_path_or_buffer=None, **kwargs):
             try:
                 c_type = ctype_or_callable(tmp_struct)
             except TypeError:
-                c_type = ctype_or_callable(tmp_struct, file_path_or_buffer)
-
+                try:
+                    c_type = ctype_or_callable(tmp_struct, file_path_or_buffer)
+                except TypeError:
+                    c_type = ctype_or_callable(tmp_struct, file_path_or_buffer, buff)
             ready_fields.append((attr_name, c_type))
 
     if file_path_or_buffer and is_file:
