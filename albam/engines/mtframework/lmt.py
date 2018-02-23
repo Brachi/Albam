@@ -4,50 +4,35 @@ from ctypes import Structure, sizeof, c_uint, c_float, c_ushort, c_ubyte, addres
 from albam.lib.structure import DynamicStructure, get_offset
 
 
-def get_padding(structure):
-    # TODO: figure out the rule
-    first_non_null_offset = [o for o in structure.offsets if o][0]
-    diff = first_non_null_offset - sizeof(structure)
-    if diff:
-        return c_ubyte * abs(diff)
-    return c_ubyte * 0
-
-
 def get_block_info_array(structure):
-    non_null_offsets = [o for o in structure.offsets if o]
+    non_null_offsets = [o for o in structure.block_offset_array if o]
     return AnimBlockInfo * len(non_null_offsets)
 
 
-def get_frames(structure):
-    total_frames = 0
-    for block in structure.block_info_array:
-        frames_count = block.bone_count * block.frame_count
-        total_frames += frames_count
-    return AnimFrame * total_frames
+def get_frames_buffer(structure, file_path, buff):
+    size = 0
+    buff.seek(structure.block_info_array[0].offset)
+    initial_pos = buff.tell()
+    for i, block in enumerate(structure.block_info_array):
+        frames_info = (AnimFrame * block.bone_count)()
+        buff.readinto(frames_info)
+        buffer_size = sum(f.buffer_size for f in frames_info)
+        if frames_info[0].buffer_offset < buff.tell():
+            buffer_size = 0
+        if buffer_size:
+            buff.seek(buffer_size, 1)
+        tot_size = sizeof(frames_info) + buffer_size
+        size += tot_size
+        extra_1 = block.count_01 * 8
+        extra_2 = block.count_02 * 8
+        if extra_1:
+            buff.read(extra_1)
+        if extra_2:
+            buff.read(extra_2)
+        size += extra_1 + extra_2
 
-
-def get_buffer(structure):
-    total_size = sum(frame.buffer_size for frame in structure.frames)
-    return c_ubyte * total_size
-
-
-def get_unknown_buffer(structure):
-    total_size = 0
-    for block in structure.block_info_array:
-        unk_start = block.unk_01[26]
-        unk_end = block.unk_01[-1]
-        size = unk_end - unk_start
-        total_size += size
-
-    return c_ubyte * total_size
-
-
-class AnimBlockInfo(Structure):
-
-    _fields_ = (('offset', c_uint),
-                ('bone_count', c_uint),
-                ('frame_count', c_uint),
-                ('unk_01', c_uint * 45))
+    buff.seek(initial_pos)
+    return c_ubyte * size
 
 
 class LMTVec3Frame(Structure):
@@ -105,18 +90,69 @@ class AnimFrame(Structure):
                 )
 
 
+class AnimBlockInfo(Structure):
+
+    _fields_ = (('offset', c_uint),
+                ('bone_count', c_uint),
+                ('frame_count', c_uint),
+                ('unk_01', c_uint * 25),
+                ('count_01', c_uint),
+                ('offset_01', c_uint),
+                ('unk_02', c_uint * 16),
+                ('count_02', c_uint),
+                ('offset_02', c_uint),
+                )
+
+
 class LMT(DynamicStructure):
 
     _fields_ = (('ID', c_uint,),
                 ('version', c_ushort),
-                ('blocks_count', c_ushort),
-                ('offsets', lambda s: (s.blocks_count) * c_uint),
-                ('padding', get_padding),
+                ('block_count', c_ushort),
+                ('block_offset_array', lambda s: (s.block_count) * c_uint),
+                ('padding', lambda s: c_ubyte * ((16 - (sizeof(s) & 15)) & 15)),
                 ('block_info_array', get_block_info_array),
-                ('frames', get_frames),
-                ('buffer', get_buffer),
-                #  ('unk_buffer', get_unknown_buffer)
+                ('frames_buffer', get_frames_buffer),
                 )
+
+    def read_frame_buffer(self, block_index):
+        final_frames = []
+        block = self.block_info_array[block_index]
+        base_address = addressof(self.frames_buffer)
+        base_offset = get_offset(self, 'frames_buffer')
+
+        frames_info = (AnimFrame * block.bone_count).from_address(base_address)
+        for frame_info in frames_info:
+            buffer_relative_offset = frame_info.buffer_offset - base_offset
+            buffer_address = base_address + buffer_relative_offset
+            frame_cls = self._get_frame_class(frame_info.buffer_type)
+            if not frame_cls:
+                continue
+            frame = frame_cls.from_address(buffer_address)
+            final_frames.append((frame_info, frame))
+
+        return final_frames
+
+    def _get_frame_class(self, buffer_type):
+        if buffer_type == 6:
+            cls = LMTQuatFramev14
+        elif buffer_type == 2:
+            cls = LMTVec3Frame
+        else:
+            cls = None
+            print('unsupported buffer_type: {}'.format(buffer_type))
+        return cls
+
+    def _get_track_type(self, frame_info):
+        if frame_info.buffer_type == 6:
+            data_type = 'rotation'
+        elif frame_info.buffer_type == 2 and frame_info.bone_index != 0:
+            data_type = 'location_ik'
+        elif frame_info.buffer_type == 2 and frame_info.bone_index == 0:
+            data_type = 'location'
+        else:
+            data_type = None
+        return data_type
 
     def decompress(self):
         """
@@ -132,26 +168,10 @@ class LMT(DynamicStructure):
                                       'location': [],
                                       'location_ik': [],
                                       'rotation_ik': [],
-                             })
-
-        buffer_address = addressof(self.buffer)
-        for frame in self.frames:
-            relative_start = frame.buffer_offset - get_offset(self, 'buffer')
-            address = buffer_address + relative_start
-            data_type = None
-            if frame.buffer_type != 6:
-                print(frame.bone_index, frame.buffer_type, frame.usage, frame.joint_type)
-            if frame.buffer_type == 6:
-                cls = LMTQuatFramev14
-                data_type = 'rotation'
-            elif frame.buffer_type == 2:
-                cls = LMTVec3Frame
-                data_type = 'location_ik'
-            else:
-                print('unsupported buffer_type', frame.buffer_type)
-                continue
-            data = cls.from_address(address).decompress()
-            tracks[frame.bone_index][data_type].append(data)
-            #if data_type == 'location_ik':
-            #    tracks[frame.bone_index]['rotation_ik'].append(tuple(frame.reference_data[0:3]))
+                                      })
+        frames = self.read_frame_buffer(0)
+        for frame_info, frame in frames:
+            track_type = self._get_track_type(frame_info)
+            frame_data = frame.decompress()
+            tracks[frame_info.bone_index][track_type].append(frame_data)
         return tracks
