@@ -33,14 +33,11 @@ def import_arc(blender_object, file_path, **kwargs):
     extracting all files to a tmp dir and saving unknown/unused data
     to the armature (if any) for using in exporting
     """
-
-    unpack_dir = kwargs.get('unpack_dir')
-
     if file_path.endswith(tuple(KNOWN_ARC_BLENDER_CRASH) + tuple(CORRUPTED_ARCS)):
         raise ValueError('The arc file provided is not supported yet, it might crash Blender')
 
     base_dir = os.path.basename(file_path).replace('.arc', '_arc_extracted')
-    out = unpack_dir or os.path.join(os.path.expanduser('~'), '.albam', 're5', base_dir)
+    out = os.path.join(os.path.expanduser('~'), '.albam', 're5', base_dir)
     if not os.path.isdir(out):
         os.makedirs(out)
     if not out.endswith(os.path.sep):
@@ -49,15 +46,11 @@ def import_arc(blender_object, file_path, **kwargs):
     arc = Arc(file_path=file_path)
     arc.unpack(out)
 
-    mod_files = [os.path.join(root, f) for root, _, files in os.walk(out)
-                 for f in files if f.endswith('.mod')]
-    mod_folders = [os.path.dirname(mod_file.split(out)[-1]) for mod_file in mod_files]
+    extra_files = [os.path.join(root, f) for root, _, files in os.walk(out)
+                   for f in files if f.endswith(('lmt', '.mod'))]
 
-    return {'files': mod_files,
-            'kwargs': {'parent': blender_object,
-                       'mod_folder': mod_folders[0],  # XXX will break if mods are in different folders
-                       'base_dir': out,
-                       },
+    return {'files': extra_files,
+            'kwargs': {'base_dir': out},
             }
 
 
@@ -301,7 +294,7 @@ def _create_blender_armature_from_mod(blender_object, mod, armature_name):
     bpy.context.scene.objects.active = armature_ob
     armature_ob.select = True
 
-    _create_blender_bones(mod, armature, connect_to_child=True)
+    _create_blender_bones(mod, armature, connect_to_child=False)
     assert len(armature.bones) == len(mod.bones_array)
     _create_bone_groups(armature_ob, mod)
     return armature_ob
@@ -318,6 +311,8 @@ def _create_blender_bones(mod, armature, connect_to_child=False):
             blender_bone.head = Vector((bone.location_x / 100,
                                         bone.location_z * -1 / 100,
                                         bone.location_y / 100))
+            blender_bone.tail = blender_bone.head
+            blender_bone.tail[2] += 0.01
             continue
         chain = [i] + parents
         wtm = Matrix.Translation((0, 0, 0))
