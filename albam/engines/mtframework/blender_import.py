@@ -18,7 +18,6 @@ from albam.engines.mtframework.utils import (
     get_bone_parents_from_mod,
     transform_vertices_from_bbox,
     texture_code_to_blender_texture,
-
     )
 from albam.engines.mtframework.mappers import BONE_INDEX_TO_GROUP
 from albam.lib.misc import chunks
@@ -48,7 +47,8 @@ def import_arc(blender_object, file_path, **kwargs):
     arc.unpack(out)
 
     extra_files = [os.path.join(root, f) for root, _, files in os.walk(out)
-                   for f in files if f.endswith(('lmt', '.mod'))]
+                   # for f in files if f.endswith(('lmt', '.mod'))]
+                   for f in files if f.endswith('.mod')]
 
     return {'files': extra_files,
             'kwargs': {'base_dir': out},
@@ -72,28 +72,78 @@ def import_lmt(blender_object, file_path, **kwargs):
     if not armatures:
         print('no armatures, skipping lmt import')
         return
-    for armature in armatures:
-        parent = armature.parent
-        mod = Mod156(file_path=BytesIO(parent.albam_imported_item.data))
-        mapping = mod.bones_animation_mapping
+    armature = armatures[0]  # XXX temp
+    parent = armature.parent
+    mod = Mod156(file_path=BytesIO(parent.albam_imported_item.data))
+    mapping = mod.bones_animation_mapping
 
-    for track_index, frames in anim_data.items():
+    base_name = os.path.basename(file_path)
+    for i, anim_block in enumerate(anim_data):
+        name = base_name + str(i)
+        _import_animation(name, armature, mapping, anim_block)
+
+
+def _import_animation(name, armature, mapping, anim_dict):
+    armature.animation_data_create()
+    action = bpy.data.actions.new(name)
+    armature.animation_data.action = action
+
+    for track_index, frames in anim_dict.items():
         bone_index = mapping[track_index]
         if bone_index == 255:
             continue
-        if frames['rotation']:
-            armature.pose.bones[bone_index].rotation_mode = 'QUATERNION'
-            armature.pose.bones[bone_index].rotation_quaternion = frames['rotation'][0]
-        if frames['location']:
-            armature.pose.bones[bone_index].location = [f / 100 for f in frames['location'][0]]
 
-        # XXX 
-        # _add_ik(armature, frames, bone_index)
+        group = action.groups.new(str(bone_index))
+        if frames['is_ik']:
+            bone_index = _create_ik_bone(armature, bone_index)
+        _add_rotation_curves(armature, action, bone_index, group, frames['rotation'])
+        _add_location_curves(armature, action, bone_index, group, frames['location'])
 
 
-def _add_ik(armature, frames, bone_index):
-    if not frames['location_ik']:
+def _add_rotation_curves(armature, action, bone_index, group, frames):
+    data_path = "pose.bones[\"{}\"].rotation_quaternion".format(bone_index)
+    curves = [action.fcurves.new(data_path=data_path, index=i) for i in range(4)]
+    for curve in curves:
+        curve.group = group
+
+    default_rotation = (1, 0, 0, 0)
+    rotation_frames = frames or [default_rotation]
+    for frame_index, frame in enumerate(rotation_frames):
+        armature.pose.bones[bone_index].rotation_mode = 'QUATERNION'
+        armature.pose.bones[bone_index].rotation_quaternion = frame
+        for i in range(4):
+            curves[i].keyframe_points.add(1)
+            curves[i].keyframe_points[-1].co = (frame_index, armature.pose.bones[bone_index].rotation_quaternion[i])
+
+
+def _add_location_curves(armature, action, bone_index, group, frames):
+    # default location with 0, 0, 0 is OK.
+    if not frames:
         return
+
+    data_path = "pose.bones[\"{}\"].location".format(bone_index)
+    curves = [action.fcurves.new(data_path=data_path, index=i) for i in range(3)]
+    for curve in curves:
+        curve.group = group
+
+    for frame_index, frame in enumerate(frames):
+        test = _tmp_convert(armature, bone_index, frame)
+        armature.pose.bones[bone_index].location = test
+        for i in range(3):
+            curves[i].keyframe_points.add(1)
+            curves[i].keyframe_points[-1].co = (frame_index, armature.pose.bones[bone_index].location[i])
+
+
+def _tmp_convert(armature, bone_index, frame):
+    from albam.lib.geometry import z_up_to_y_up  # XXX The armature pose space is Y UP! why?
+    # XXX won't work in animations?? get edit bone?
+    bone_location_bind = Vector(z_up_to_y_up(armature.pose.bones[bone_index].head))
+    bone_frame = Vector([v / 100 for v in frame])
+    new = bone_frame - bone_location_bind
+    return new
+
+
+def _create_ik_bone(armature, bone_index):
     if bpy.context.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
     # deselect all objects
@@ -108,14 +158,14 @@ def _add_ik(armature, frames, bone_index):
     blender_bone.tail[2] += 0.01
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    armature.pose.bones[bone_name].location = [f / 100 for f in frames['location_ik'][0]]
-
     pose_bone = armature.pose.bones[str(bone_index)]
     constraint = pose_bone.constraints.new('IK')
     constraint.target = armature
     constraint.subtarget = bone_name
     constraint.chain_count = 3
     constraint.use_rotation = True
+
+    return bone_name
 
 
 @blender_registry.register_function('import', identifier=b'MOD\x00')

@@ -121,6 +121,17 @@ class LMT(DynamicStructure):
         base_address = addressof(self.frames_buffer)
         base_offset = get_offset(self, 'frames_buffer')
 
+        """
+        print('bloci index', block_index, 'bone_count', block.bone_count)
+        print('block.unk_01', block.unk_01[:])
+        print('block.unk_02', block.unk_02[:])
+        print('count_01', block.count_01)
+        print('count_02', block.count_02)
+        print('offset_01', block.offset_01)
+        print('offset_02', block.offset_02)
+        print()
+        print()
+        """
         frames_info = (AnimFrame * block.bone_count).from_address(base_address)
         for frame_info in frames_info:
             buffer_relative_offset = frame_info.buffer_offset - base_offset
@@ -128,7 +139,24 @@ class LMT(DynamicStructure):
             frame_cls = self._get_frame_class(frame_info.buffer_type)
             if not frame_cls:
                 continue
-            frame = frame_cls.from_address(buffer_address)
+            frame_count = frame_info.buffer_size // sizeof(frame_cls)
+            # print('frame_count', frame_count, 'buffer_size', frame_info.buffer_size)
+            if frame_info.buffer_type == 2:
+                print('[frame_info]: bone_index:', frame_info.bone_index,
+                      'buffer_type', frame_info.buffer_type,
+                      'joint_type', frame_info.joint_type,
+                      'usage', frame_info.usage)
+
+            if frame_count > 200:
+                print('error in frame')
+                print('error in frame')
+                print('error in frame')
+                print('error in frame')
+                print('error in frame')
+                print('error in frame')
+                print('error in frame')
+                continue
+            frame = (frame_cls * frame_count).from_address(buffer_address)
             final_frames.append((frame_info, frame))
 
         return final_frames
@@ -144,15 +172,19 @@ class LMT(DynamicStructure):
         return cls
 
     def _get_track_type(self, frame_info):
+        is_ik = False
         if frame_info.buffer_type == 6:
             data_type = 'rotation'
+            is_ik = False
         elif frame_info.buffer_type == 2 and frame_info.bone_index != 0:
-            data_type = 'location_ik'
+            data_type = 'location'
+            is_ik = True
         elif frame_info.buffer_type == 2 and frame_info.bone_index == 0:
             data_type = 'location'
+            is_ik = False
         else:
             data_type = None
-        return data_type
+        return data_type, is_ik
 
     def decompress(self):
         """
@@ -164,14 +196,18 @@ class LMT(DynamicStructure):
            where a frame in rotation is a tuple of w,x,y,z values (quaternions)
            and a frame in location is ?
         """
-        tracks = defaultdict(lambda: {'rotation': [],
-                                      'location': [],
-                                      'location_ik': [],
-                                      'rotation_ik': [],
-                                      })
-        frames = self.read_frame_buffer(0)
-        for frame_info, frame in frames:
-            track_type = self._get_track_type(frame_info)
-            frame_data = frame.decompress()
-            tracks[frame_info.bone_index][track_type].append(frame_data)
-        return tracks
+        animations = []
+        for i, _ in enumerate(self.block_info_array):
+            tracks = defaultdict(lambda: {'rotation': [],
+                                          'location': [],
+                                          'is_ik': False,
+                                          })
+
+            frames = self.read_frame_buffer(i)
+            for frame_info, frames in frames:
+                track_type, is_ik = self._get_track_type(frame_info)
+                frame_data = [f.decompress() for f in frames]
+                tracks[frame_info.bone_index]['is_ik'] = is_ik
+                tracks[frame_info.bone_index][track_type].extend(frame_data)
+            animations.append(tracks)
+        return animations
